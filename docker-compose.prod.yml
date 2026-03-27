@@ -1,21 +1,10 @@
-# docker-compose.prod.yml — EC2 PRODUCTION
-#
-# Key differences from dev:
-#   - No volume mounts (code is baked into the image)
-#   - Images pulled from ECR
-#   - restart: always (survives reboots)
-#   - Nginx uses prod config with SSL
-#
-# Usage on EC2:
-#   docker-compose -f docker-compose.prod.yml pull
-#   docker-compose -f docker-compose.prod.yml up -d
-
-version: "3.9"
+# docker-compose.prod.yml
+# Used by GitHub Actions to deploy on EC2
+# Images are pulled from ECR instead of built locally
 
 services:
 
   fastapi:
-    # ECR_REGISTRY and IMAGE_TAG set by GitHub Actions
     image: ${ECR_REGISTRY}/equityiq-api:${IMAGE_TAG:-latest}
     container_name: equityiq_api
     env_file: .env
@@ -36,7 +25,6 @@ services:
     env_file: .env
     environment:
       - APP_ENV=production
-      # In Docker, fastapi is the service name
       - API_BASE_URL=http://fastapi:8000
     networks:
       - equityiq_net
@@ -50,16 +38,10 @@ services:
     container_name: equityiq_nginx
     ports:
       - "80:80"
-      - "443:443"
     volumes:
-      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
-      # Let's Encrypt certs — generated on EC2 by Certbot
-      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
     networks:
       - equityiq_net
-    depends_on:
-      - fastapi
-      - streamlit
     restart: always
 
 networks:

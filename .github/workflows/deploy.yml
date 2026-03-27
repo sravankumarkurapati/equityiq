@@ -1,0 +1,131 @@
+# .github/workflows/deploy.yml
+#
+# CI/CD Pipeline for EquityIQ
+#
+# Triggers automatically on every push to main branch.
+#
+# What it does:
+#   1. Logs into AWS ECR
+#   2. Builds Docker images for FastAPI and Streamlit
+#   3. Pushes images to ECR with git SHA tag
+#   4. SSHs into EC2 and pulls + restarts containers
+#
+# Required GitHub Secrets:
+#   AWS_ACCESS_KEY_ID     - AWS credentials
+#   AWS_SECRET_ACCESS_KEY - AWS credentials
+#   AWS_REGION            - us-east-1
+#   ECR_REGISTRY          - your ECR registry URL
+#   EC2_HOST              - your EC2 public IP
+#   EC2_SSH_KEY           - your EC2 private key (.pem contents)
+
+name: Deploy EquityIQ to EC2
+
+# Trigger on every push to main branch
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ── Step 1: Get the latest code ────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Step 2: Configure AWS credentials ──────────────────────
+      # Uses the secrets you added to GitHub
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ── Step 3: Log into Amazon ECR ────────────────────────────
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Step 4: Build and push FastAPI image ───────────────────
+      # Tags image with both 'latest' and the git commit SHA
+      # Git SHA tag means every deployment is traceable
+      - name: Build and push FastAPI image
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Building FastAPI image..."
+          docker build -f Dockerfile.api \
+            -t $ECR_REGISTRY/equityiq-api:latest \
+            -t $ECR_REGISTRY/equityiq-api:$IMAGE_TAG \
+            .
+          echo "Pushing FastAPI image to ECR..."
+          docker push $ECR_REGISTRY/equityiq-api:latest
+          docker push $ECR_REGISTRY/equityiq-api:$IMAGE_TAG
+          echo "FastAPI image pushed successfully"
+
+      # ── Step 5: Build and push Streamlit image ─────────────────
+      - name: Build and push Streamlit image
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Building Streamlit image..."
+          docker build -f Dockerfile.ui \
+            -t $ECR_REGISTRY/equityiq-ui:latest \
+            -t $ECR_REGISTRY/equityiq-ui:$IMAGE_TAG \
+            .
+          echo "Pushing Streamlit image to ECR..."
+          docker push $ECR_REGISTRY/equityiq-ui:latest
+          docker push $ECR_REGISTRY/equityiq-ui:$IMAGE_TAG
+          echo "Streamlit image pushed successfully"
+
+      # ── Step 6: Deploy to EC2 ───────────────────────────────────
+      # SSHs into EC2 and runs deployment commands
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # How long to wait for the deployment to complete
+          command_timeout: 10m
+          script: |
+            echo "Connecting to EC2..."
+            cd ~/equityiq
+
+            echo "Pulling latest code from GitHub..."
+            git pull origin main
+
+            echo "Logging into ECR..."
+            aws ecr get-login-password --region us-east-1 | \
+              docker login --username AWS \
+              --password-stdin ${{ secrets.ECR_REGISTRY }}
+
+            echo "Pulling latest Docker images from ECR..."
+            docker pull ${{ secrets.ECR_REGISTRY }}/equityiq-api:latest
+            docker pull ${{ secrets.ECR_REGISTRY }}/equityiq-ui:latest
+
+            echo "Updating docker-compose to use ECR images..."
+            export ECR_REGISTRY=${{ secrets.ECR_REGISTRY }}
+            export IMAGE_TAG=latest
+
+            echo "Restarting containers..."
+            docker-compose down
+            docker-compose -f docker-compose.prod.yml up -d
+
+            echo "Waiting for containers to be healthy..."
+            sleep 30
+
+            echo "Checking container status..."
+            docker ps
+
+            echo "Testing health endpoint..."
+            curl -f http://localhost:80/health || echo "Health check failed"
+
+            echo "Deployment complete!"
