@@ -57,16 +57,39 @@ def render():
 
     st.markdown("---")
 
-    st.markdown("""
-    <div style='margin-bottom:1rem;'>
-        <span style='font-size:0.75rem; color:#64748b;
-                     text-transform:uppercase; letter-spacing:0.1em;
-                     font-weight:600;'>Daily Picks</span>
-        <span style='font-size:0.75rem; color:#475569; margin-left:8px;'>
-            Updated weekdays at 8:30 AM ET
-        </span>
-    </div>
-    """, unsafe_allow_html=True)
+    col_title, col_btn = st.columns([3, 1])
+    with col_title:
+        st.markdown("""
+        <div style='margin-bottom:1rem;'>
+            <span style='font-size:0.75rem; color:#64748b;
+                         text-transform:uppercase; letter-spacing:0.1em;
+                         font-weight:600;'>Daily Picks</span>
+            <span style='font-size:0.75rem; color:#475569; margin-left:8px;'>
+                Real-time market movers · scored by AI
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_btn:
+        if st.button("🔄 Refresh Picks", key="refresh_picks"):
+            with st.spinner("Scanning market movers... 5-8 mins"):
+                try:
+                    resp = requests.post(
+                        API_URL + "/api/screener/run",
+                        timeout=600,  # 10 min timeout
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        st.success(
+                            "Found " +
+                            str(data.get("picks_count", 0)) +
+                            " picks!"
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Screener failed. Try again.")
+                except Exception as e:
+                    st.error("Error: " + str(e))
 
     top5 = _fetch_top5()
 

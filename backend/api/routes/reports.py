@@ -123,3 +123,55 @@ async def get_history(limit: int = 20):
         items=items,
         total=len(items)
     )
+
+@router.post(
+    "/screener/run",
+    summary="Run daily stock screener on demand",
+    description=(
+        "Scans today's most active stocks from Yahoo Finance, "
+        "scores them, and saves top 5 picks to DynamoDB. "
+        "Takes 5-8 minutes to complete."
+    )
+)
+async def run_screener_now():
+    """
+    Triggers the real-time market screener on demand.
+    Fetches today's market movers, scores each one,
+    and saves top 5 picks to DynamoDB.
+    """
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
+
+    logger.info("On-demand screener triggered")
+
+    try:
+        from backend.ml.screener import run_screener, run_and_save_daily_picks
+        from datetime import datetime, timezone
+
+        success = run_and_save_daily_picks()
+
+        if success:
+            # Return today's picks
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            picks = get_daily_picks(today)
+            return {
+                "success": True,
+                "message": "Screener completed successfully",
+                "date": today,
+                "picks_count": len(picks) if picks else 0,
+                "picks": picks or [],
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Screener failed — check server logs",
+            }
+
+    except Exception as e:
+        logger.error(f"On-demand screener error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Screener failed: {str(e)}"
+        )
