@@ -1,0 +1,79 @@
+# Dockerfile.api
+#
+# Multi-stage build for the FastAPI backend.
+#
+# Stage 1 (builder):
+#   - Installs ALL dependencies including build tools
+#   - gcc and g++ needed to compile Prophet and some other packages
+#
+# Stage 2 (runtime):
+#   - Copies only the installed packages from builder
+#   - No compilers in final image = smaller + more secure
+#   - Result: ~400MB instead of ~900MB
+#
+# Build with:
+#   docker build -f Dockerfile.api -t equityiq-api .
+#
+# Run with:
+#   docker run --env-file .env -p 8000:8000 equityiq-api
+
+# ── Stage 1: Builder ──────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+# Install system build dependencies
+# These are needed at build time to compile C extensions
+# They are NOT copied to the final image
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first — Docker caches this layer
+# If requirements.txt hasn't changed, pip install is skipped
+COPY backend/requirements.txt .
+
+# Install into /install directory
+# --prefix=/install puts packages in a separate location
+# so we can copy just the packages to the runtime stage
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ── Stage 2: Runtime ──────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+# Only curl needed at runtime (for Docker healthcheck)
+RUN apt-get update && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages from builder stage
+COPY --from=builder /install /usr/local
+
+# Copy application source code
+COPY backend/ ./backend/
+COPY .env.example ./.env.example
+
+# Tell Python where to find our modules
+ENV PYTHONPATH=/app
+
+# Don't buffer stdout/stderr so logs appear immediately
+ENV PYTHONUNBUFFERED=1
+
+# Port FastAPI listens on
+EXPOSE 8000
+
+# Health check — Docker uses this to know if container is healthy
+# Checks every 30s, fails after 3 attempts
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Start FastAPI with uvicorn
+# --host 0.0.0.0 makes it accessible from outside the container
+# Remove --reload in production (handled by docker-compose.prod.yml)
+CMD ["uvicorn", "backend.api.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--reload"]

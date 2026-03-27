@@ -1,0 +1,75 @@
+# docker-compose.yml — LOCAL DEVELOPMENT
+#
+# Starts 3 containers on a private network:
+#   fastapi   — backend API  (port 8000)
+#   streamlit — frontend UI  (port 8501)
+#   nginx     — reverse proxy (port 80)
+#
+# Usage:
+#   docker-compose up --build    start everything
+#   docker-compose down          stop everything
+#   docker-compose logs -f       view logs
+
+version: "3.9"
+
+services:
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: equityiq_api
+    # Load all variables from .env into the container
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount source for hot reload in development
+      # Removed in docker-compose.prod.yml
+      - ./backend:/app/backend
+    networks:
+      - equityiq_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    container_name: equityiq_ui
+    env_file: .env
+    environment:
+      # Inside Docker, fastapi container is reachable by service name
+      - API_BASE_URL=http://fastapi:8000
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app/frontend
+    networks:
+      - equityiq_net
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: equityiq_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - equityiq_net
+    depends_on:
+      - fastapi
+      - streamlit
+    restart: unless-stopped
+
+networks:
+  equityiq_net:
+    driver: bridge
